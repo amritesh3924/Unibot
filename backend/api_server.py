@@ -5,6 +5,12 @@ Run this instead of app.py when using the custom frontend
 import sys
 from pathlib import Path
 
+import asyncio
+import sys
+
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # Add parent directory to path to import UniBot modules
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
