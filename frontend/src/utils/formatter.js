@@ -155,6 +155,18 @@ function escapeHtml(text) {
 
 // Format inline elements (bold, italic, links, etc.)
 // IMPORTANT: Apply markdown formatting BEFORE escaping HTML
+//
+// PLACEHOLDER SAFETY:
+// Placeholders MUST NOT contain characters that any later regex pass in this
+// function could match (specifically '_' and '*'). The old token
+// `__PLACEHOLDER_N__` used double underscores, which is indistinguishable
+// from __bold__ markdown syntax - so when two bold/link segments landed on
+// the same line, the __text__ bold pass would re-match across an
+// already-inserted placeholder from an earlier pass, corrupting it and
+// leaking raw "PLACEHOLDER_N" text into the rendered output (e.g. two
+// **bold** fee amounts on one line). Control characters can't appear in
+// normal text and can't match \S/\w-based markdown patterns, so they're
+// used here instead.
 function formatInline(text) {
   if (!text) return ''
   
@@ -163,63 +175,61 @@ function formatInline(text) {
   // Use a placeholder approach to protect HTML we create
   const placeholders = []
   let placeholderIndex = 0
+  const makePlaceholder = () => `\u0001PH${placeholderIndex++}\u0002`
   
   // Links [text](url) - handle first
   formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, linkText, url) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>`)
     return placeholder
   })
   
   // Bold (**text** or __text__)
   formatted = formatted.replace(/\*\*([^*]+?)\*\*/g, (match, content) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<strong>${escapeHtml(content)}</strong>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<strong>${escapeHtml(content)}</strong>`)
     return placeholder
   })
   formatted = formatted.replace(/__([^_]+?)__/g, (match, content) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<strong>${escapeHtml(content)}</strong>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<strong>${escapeHtml(content)}</strong>`)
     return placeholder
   })
   
   // Italic (*text* or _text_) - single asterisks/underscores (not part of bold)
   formatted = formatted.replace(/(?<!\*)\*([^*\s][^*]*?[^*\s])\*(?!\*)/g, (match, content) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<em>${escapeHtml(content)}</em>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<em>${escapeHtml(content)}</em>`)
     return placeholder
   })
   formatted = formatted.replace(/(?<!_)_([^_\s][^_]*?[^_\s])_(?!_)/g, (match, content) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<em>${escapeHtml(content)}</em>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<em>${escapeHtml(content)}</em>`)
     return placeholder
   })
   
   // Dates (format: YYYY-MM-DD or DD/MM/YYYY)
   formatted = formatted.replace(/\b(\d{4}-\d{2}-\d{2})\b/g, (match, date) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<time>${date}</time>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<time>${date}</time>`)
     return placeholder
   })
   formatted = formatted.replace(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/g, (match, date) => {
-    const placeholder = `__PLACEHOLDER_${placeholderIndex}__`
-    placeholders[placeholderIndex] = `<time>${date}</time>`
-    placeholderIndex++
+    const placeholder = makePlaceholder()
+    placeholders.push(`<time>${date}</time>`)
     return placeholder
   })
   
   // Escape any remaining text (that wasn't part of markdown)
   formatted = escapeHtml(formatted)
   
-  // Restore placeholders (which contain our HTML)
+  // Restore placeholders (which contain our HTML).
+  // Use split/join (replaceAll) rather than a single replace, in case a
+  // placeholder somehow appears more than once - a single first-match
+  // replace would silently leave later occurrences unresolved.
   placeholders.forEach((html, index) => {
-    formatted = formatted.replace(`__PLACEHOLDER_${index}__`, html)
+    const token = `\u0001PH${index}\u0002`
+    formatted = formatted.split(token).join(html)
   })
   
   return formatted

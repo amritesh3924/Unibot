@@ -8,6 +8,15 @@ import { checkBackendStatus, sendChatMessage } from './utils/api'
 
 const API_BASE_URL = 'http://127.0.0.1:8001'
 
+// One session id per browser tab/page load, so LangGraph keeps each
+// visitor's conversation in its own thread instead of merging everyone
+// into the single instance-wide thread.
+const SESSION_ID = (
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`
+)
+
 function App() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -55,7 +64,7 @@ function App() {
     setMessages(prev => [...prev, thinkingMsg])
 
     try {
-      const response = await sendChatMessage(API_BASE_URL, userMessage, conversationHistory)
+      const response = await sendChatMessage(API_BASE_URL, userMessage, conversationHistory, SESSION_ID)
       
       // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))
@@ -117,7 +126,7 @@ function App() {
     setMessages(prev => [...prev, thinkingMsg])
 
     try {
-      const response = await sendChatMessage(API_BASE_URL, question, conversationHistory)
+      const response = await sendChatMessage(API_BASE_URL, question, conversationHistory, SESSION_ID)
       
       // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))

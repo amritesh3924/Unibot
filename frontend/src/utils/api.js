@@ -53,7 +53,7 @@ export async function checkBackendStatus(apiBaseUrl, setBackendStatus) {
   }
 }
 
-export async function sendChatMessage(apiBaseUrl, message, history = []) {
+export async function sendChatMessage(apiBaseUrl, message, history = [], sessionId) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 120000) // 2 minute timeout
   
@@ -66,7 +66,8 @@ export async function sendChatMessage(apiBaseUrl, message, history = []) {
       body: JSON.stringify({
         message,
         success_criteria: "The answer should be clear and accurate",
-        history
+        history,
+        session_id: sessionId
       }),
       signal: controller.signal
     })
@@ -92,4 +93,3 @@ export async function sendChatMessage(apiBaseUrl, message, history = []) {
     throw error
   }
 }
-

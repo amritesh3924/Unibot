@@ -1,0 +1,36 @@
+# Secrets - NEVER bake these into the image. Set as platform env vars.
+.env
+.env.local
+
+# Local dev / dependency dirs (reinstalled fresh in the image)
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Old Gemini-embedding backup DB - superseded by chroma_db_fastembed/
+chroma_db/
+
+# Frontend is a separate static deploy (Vercel/Netlify/etc.), not part
+# of this backend image
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Git / IDE / OS noise
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# Scraper runtime/progress files - not needed to serve chat, and
+# re-committing them on every build churns the image layer for no
+# benefit. The data they describe is already baked into
+# chroma_db_fastembed/.
+scrape_tracker.json
+scrape_checkpoint.json
+
+# Docs / misc - not needed at runtime
+*.md
+sandbox/

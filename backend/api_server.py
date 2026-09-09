@@ -4,7 +4,7 @@ Run this instead of app.py when using the custom frontend
 """
 import sys
 from pathlib import Path
-
+import time
 import asyncio
 import sys
 
@@ -60,8 +60,8 @@ async def lifespan(app: FastAPI):
         await unibot.setup()
         
         print("[OK] UniBot initialized successfully")
-        print(f"[INFO] - Using Gemini model: gemini-2.5-flash")
-        print(f"[INFO] - Using embeddings: gemini-embedding-001")
+        print(f"[INFO] - Using Gemini model: gemini-3.5-flash-lite")
+        print(f"[INFO] - Using embeddings: FastEmbed (BAAI/bge-small-en-v1.5, local, no API calls)")
         
         # Check if knowledge base has data
         try:
@@ -111,6 +111,7 @@ class MessageRequest(BaseModel):
     message: str
     success_criteria: Optional[str] = None
     history: Optional[List[Dict[str, Any]]] = None
+    session_id: Optional[str] = None
 
 class MessageResponse(BaseModel):
     response: str
@@ -256,7 +257,7 @@ def extract_text_content(content):
 async def chat(request: MessageRequest):
     """Handle chat messages"""
     global unibot
-    
+    request_start = time.perf_counter()
     if not unibot:
         raise HTTPException(status_code=503, detail="UniBot not initialized")
     
@@ -266,14 +267,14 @@ async def chat(request: MessageRequest):
     # Validate query is college-domain only
     is_valid, rejection_message = intent_detector.validate_query(request.message)
     if not is_valid:
+        total_time = time.perf_counter() - request_start
+        print(f"[TIMING] Total /api/chat: {total_time:.2f}s")
         return MessageResponse(
             response=rejection_message,
             history=request.history or [],
             status="rejected"
         )
     
-    # Detect intent
-    intent_info = intent_detector.get_intent_info(request.message)
     
     try:
         # Filter existing feedback from history
@@ -284,7 +285,8 @@ async def chat(request: MessageRequest):
         updated_history = await unibot.run_superstep(
             request.message,
             success_criteria,
-            history
+            history,
+            thread_id=request.session_id
         )
         
         # Filter feedback from results
@@ -343,4 +345,3 @@ async def reset():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8001)
-

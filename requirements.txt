@@ -2,7 +2,6 @@ langgraph
 langchain
 langchain-google-genai
 langchain-community
-langchain-experimental
 langchain-text-splitters
 langchain-core
 langchain-chroma
@@ -24,4 +23,4 @@ python-multipart
 pytesseract
 pdf2image
 Pillow
-
+fastembed

@@ -3,17 +3,19 @@ RAG (Retrieval Augmented Generation) system for UniBot
 Handles document storage, embedding, and retrieval for college information
 """
 from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from typing import List, Optional
 import os
+import time
+import hashlib
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
 class RAGSystem:
-    def __init__(self, persist_directory: str = "./chroma_db", collection_name: str = "college_data"):
+    def __init__(self, persist_directory: str = "./chroma_db_fastembed", collection_name: str = "college_data"):
         """
         Initialize the RAG system with vector store
         
@@ -31,9 +33,23 @@ class RAGSystem:
         
         self.persist_directory = persist_directory
         self.collection_name = collection_name
-        # Using text-embedding-004 (Google's embedding model)
-        # Note: gemini-embedding-001 is not available, text-embedding-004 is the current model
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
+        # Local embeddings via FastEmbed (BAAI/bge-small-en-v1.5, 384-dim).
+        # No Gemini embedding calls / no quota dependency for embedding.
+        #
+        # IMPORTANT: explicitly pin cache_dir. FastEmbedEmbeddings defaults
+        # to a cache under the OS temp dir (e.g. /tmp/fastembed_cache),
+        # which most hosting platforms wipe on every container restart -
+        # that would silently trigger a ~130MB re-download from
+        # HuggingFace on every cold start (slow, and a hard failure if the
+        # platform blocks outbound HF access at runtime). Pointing this at
+        # a path inside the app directory lets the Docker image bake the
+        # model in at build time, so runtime never needs network access
+        # for embeddings.
+        fastembed_cache_dir = os.getenv("FASTEMBED_CACHE_DIR", "./fastembed_cache")
+        self.embeddings = FastEmbedEmbeddings(
+            model_name="BAAI/bge-small-en-v1.5",
+            cache_dir=fastembed_cache_dir
+        )
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -77,77 +93,165 @@ class RAGSystem:
     
     def add_documents(self, texts: List[str], metadatas: Optional[List[dict]] = None, skip_duplicates: bool = True):
         """
-        Add documents to the vector store with duplicate checking
-        
-        Args:
-            texts: List of text documents to add
-            metadatas: Optional list of metadata dictionaries for each document
-            skip_duplicates: If True, skip documents with URLs already in knowledge base
+        Add documents to the vector store with chunk-level duplicate checking
+        and rate-limit-safe batching.
         """
+
         if not texts:
             return
-        
+
         if metadatas is None:
             metadatas = [{}] * len(texts)
-        
-        # Ensure metadatas list matches texts list length
+
         if len(metadatas) != len(texts):
             metadatas = metadatas[:len(texts)] + [{}] * (len(texts) - len(metadatas))
-        
-        # Check for existing sources if skip_duplicates is enabled
-        existing_sources = set()
-        if skip_duplicates:
-            existing_sources = self.get_existing_sources()
-        
-        # Create Document objects, filtering duplicates
+
+        # Create Document objects
         documents = []
-        skipped_count = 0
+
         for text, meta in zip(texts, metadatas):
-            if text and len(text.strip()) > 0:  # Only add non-empty documents
-                # Ensure source URL is in metadata
-                if 'source' not in meta:
-                    meta['source'] = 'Unknown'
-                
-                # Skip if URL already exists
-                if skip_duplicates and meta['source'] in existing_sources:
-                    skipped_count += 1
-                    continue
-                
-                documents.append(Document(page_content=text, metadata=meta))
-        
-        if skipped_count > 0:
-            print(f"  ⏭️  Skipped {skipped_count} duplicate(s) already in knowledge base")
-        
+            if text and len(text.strip()) > 0:
+                if "source" not in meta:
+                    meta["source"] = "Unknown"
+
+                documents.append(
+                    Document(
+                        page_content=text,
+                        metadata=meta
+                    )
+                )
+
         if not documents:
-            if skipped_count > 0:
-                print("  ℹ️  All documents were duplicates, nothing to add")
-            else:
-                print("Warning: No valid documents to add after filtering")
+            print("Warning: No valid documents to add after filtering")
             return
-        
+
         # Split documents into chunks
         chunks = self.text_splitter.split_documents(documents)
-        
+
         if not chunks:
             print("Warning: No chunks created from documents")
             return
-        
-        # Add to vector store in batches (ChromaDB has batch size limit)
-        batch_size = 5000  # Safe batch size for ChromaDB
+
+        # ---------------------------------------------------------
+        # CHUNK-LEVEL DUPLICATE CHECK
+        # ---------------------------------------------------------
+        existing_hashes = set()
+
+        if skip_duplicates:
+            try:
+                collection = self.vectorstore._collection
+
+                results = collection.get(
+                    limit=10000,
+                    include=["documents", "metadatas"]
+                )
+
+                existing_documents = results.get("documents") or []
+                existing_metadatas = results.get("metadatas") or []
+
+                for doc_content, metadata in zip(
+                    existing_documents,
+                    existing_metadatas
+                ):
+                    if not doc_content:
+                        continue
+
+                    metadata = metadata or {}
+                    source = metadata.get("source", "Unknown")
+
+                    chunk_hash = metadata.get("chunk_hash")
+
+                    if not chunk_hash:
+                        chunk_hash = hashlib.sha256(
+                            f"{source}\n{doc_content}".encode("utf-8")
+                        ).hexdigest()
+
+                    existing_hashes.add(chunk_hash)
+
+            except Exception as e:
+                print(f"⚠️ Could not check existing chunks: {e}")
+
+        # Remove chunks already present in ChromaDB
+        new_chunks = []
+        skipped_count = 0
+
+        for chunk in chunks:
+            source = chunk.metadata.get("source", "Unknown")
+
+            chunk_hash = hashlib.sha256(
+                f"{source}\n{chunk.page_content}".encode("utf-8")
+            ).hexdigest()
+
+            chunk.metadata["chunk_hash"] = chunk_hash
+
+            if skip_duplicates and chunk_hash in existing_hashes:
+                skipped_count += 1
+                continue
+
+            new_chunks.append(chunk)
+
+        if skipped_count > 0:
+            print(
+                f"  ⏭️ Skipped {skipped_count} chunks already in knowledge base"
+            )
+
+        if not new_chunks:
+            print("  ℹ️ All chunks were already indexed")
+            return
+
+        chunks = new_chunks
+
+        # ---------------------------------------------------------
+        # RATE-LIMIT-SAFE BATCHING
+        # ---------------------------------------------------------
+        batch_size = 10
         total_chunks = len(chunks)
         added_count = 0
-        
+
         try:
             for i in range(0, total_chunks, batch_size):
                 batch = chunks[i:i + batch_size]
-                self.vectorstore.add_documents(batch)
-                added_count += len(batch)
-                # Show progress for large batches
-                if total_chunks > batch_size:
-                    print(f"  [BATCH] Added batch {i//batch_size + 1}: {added_count}/{total_chunks} chunks", flush=True)
-            
-            # ChromaDB automatically persists, no need to call persist() in newer versions
-            print(f"[OK] Added {added_count} chunks from {len(documents)} documents to knowledge base")
+
+                while True:
+                    try:
+                        self.vectorstore.add_documents(batch)
+
+                        added_count += len(batch)
+
+                        print(
+                            f"  [BATCH] Added batch {i//batch_size + 1}: "
+                            f"{added_count}/{total_chunks} chunks",
+                            flush=True
+                        )
+
+                        break
+
+                    except Exception as e:
+                        error_text = str(e)
+
+                        if (
+                            "429" in error_text
+                            or "RESOURCE_EXHAUSTED" in error_text
+                        ):
+                            print(
+                                "  ⏳ Gemini quota reached. "
+                                "Waiting 65 seconds before retrying...",
+                                flush=True
+                            )
+
+                            time.sleep(65)
+
+                        else:
+                            raise
+
+                # Keep us safely below the 100 requests/minute limit.
+                if i + batch_size < total_chunks:
+                    time.sleep(30)
+
+            print(
+                f"[OK] Added {added_count} new chunks to knowledge base"
+            )
+
         except Exception as e:
             print(f"Error adding documents to vector store: {e}")
             raise
@@ -344,4 +448,3 @@ class RAGSystem:
             "persist_directory": self.persist_directory,
             "collection_name": self.collection_name
         }
-

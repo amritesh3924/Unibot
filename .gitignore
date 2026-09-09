@@ -30,11 +30,23 @@ ENV/
 *.db-wal
 memory.db*
 
-# ChromaDB (vector database - too large to commit)
+# ChromaDB (old Gemini-embedding backup - superseded, too large/stale to commit)
 chroma_db/
 **/chroma_db/
+
+# Vector DB internals are excluded by extension below, EXCEPT inside
+# chroma_db_fastembed/ - that one IS committed on purpose. It's the
+# pre-built knowledge base the deployed app serves from, so the app
+# doesn't depend on re-scraping/re-embedding or a persistent disk at
+# deploy time.
 *.sqlite3
 *.bin
+!chroma_db_fastembed/**/*.sqlite3
+!chroma_db_fastembed/**/*.bin
+
+# FastEmbed model cache - baked into the Docker image at build time
+# instead (see Dockerfile), not committed to the repo.
+fastembed_cache/
 *.pickle
 
 # Jupyter Notebook checkpoints
@@ -61,3 +73,8 @@ frontend/dist/
 frontend/.vite/
 frontend/*.log
 
+# Test/dev-only scripts and archives - not part of the app
+test_playwright.py
+test_scraper.py
+index_bmsit.py
+*.zip

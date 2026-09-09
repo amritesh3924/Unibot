@@ -9,6 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import time
 
 load_dotenv(override=True)
 
@@ -29,7 +30,7 @@ class IntentDetector:
         
         # Use a lightweight model for fast classification
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash-lite",
             temperature=0.1  # Low temperature for consistent classification
         )
         self.classifier_llm = self.llm.with_structured_output(QueryClassification)
@@ -63,10 +64,16 @@ Respond with:
         user_prompt = f"Classify this query: {query}"
 
         try:
+            start_time = time.perf_counter()
+
             result = self.classifier_llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ])
+
+            elapsed = time.perf_counter() - start_time
+            print(f"[TIMING] Intent classification: {elapsed:.2f}s")
+
             return result
         except Exception as e:
             # Fallback to basic keyword-based classification if LLM fails

@@ -46,37 +46,55 @@ class CollegeScraper:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
-    
     def _is_valid_url(self, url: str) -> bool:
-        """Check if URL is valid and within the college domain"""
+        """Check if URL is valid and belongs to the college website."""
         try:
             parsed = urlparse(url)
             base_parsed = urlparse(self.base_url)
-            
-            # Must be same domain
-            if parsed.netloc != base_parsed.netloc:
+
+            # Must use HTTP/HTTPS
+            if parsed.scheme not in ("http", "https"):
                 return False
-            
-            # Skip common non-content URLs (but allow PDFs if include_pdfs is True)
-            skip_patterns = [
-                r'\.(doc|docx|xls|xlsx|zip|rar)$',  # Skip office docs and archives
-                r'\.(jpg|jpeg|png|gif|svg|ico|webp)$',  # Skip images
-                r'#',  # Skip anchors
-                r'javascript:',
-                r'mailto:',
-                r'tel:',
+
+            # Must be the exact same hostname
+            if parsed.hostname != base_parsed.hostname:
+                return False
+
+            # Reject paths containing obvious external-domain patterns
+            path_lower = parsed.path.lower()
+
+            blocked_patterns = [
+                "linkedin.com",
+                "youtube.com",
+                "facebook.com",
+                "instagram.com",
+                "twitter.com",
+                "x.com",
+                "gmail.com",
+                "google.com",
             ]
-            
-            # Allow PDFs if include_pdfs is enabled
-            if not self.include_pdfs:
-                skip_patterns.append(r'\.pdf$')
-            
-            for pattern in skip_patterns:
-                if re.search(pattern, url, re.IGNORECASE):
-                    return False
-            
+
+            if any(pattern in path_lower for pattern in blocked_patterns):
+                return False
+
+            # Skip common non-content files
+            skip_extensions = (
+                ".doc", ".docx", ".xls", ".xlsx",
+                ".zip", ".rar",
+                ".jpg", ".jpeg", ".png",
+                ".gif", ".svg", ".ico", ".webp"
+            )
+
+            if path_lower.endswith(skip_extensions):
+                return False
+
+            # Skip anchors and special URLs
+            if "#" in url:
+                return False
+
             return True
-        except:
+
+        except Exception:
             return False
     
     async def _extract_text_content(self, page: Page) -> Dict[str, str]:
@@ -324,15 +342,15 @@ class CollegeScraper:
             # Fast page load - be aggressive with timeouts
             try:
                 await asyncio.wait_for(
-                    page.goto(original_url, wait_until='domcontentloaded', timeout=10000),
-                    timeout=12.0
+                    page.goto(original_url, wait_until='domcontentloaded', timeout=30000),
+                    timeout=35.0
                 )
                 await page.wait_for_timeout(300)  # Wait 0.3 seconds only
             except (asyncio.TimeoutError, Exception):
                 try:
                     await asyncio.wait_for(
-                        page.goto(original_url, wait_until='load', timeout=10000),
-                        timeout=12.0
+                        page.goto(original_url, wait_until='load', timeout=30000),
+                        timeout=35.0
                     )
                 except:
                     await page.close()
@@ -452,10 +470,12 @@ class CollegeScraper:
                 print(f"[{timestamp}] [{progress}/{self.max_pages}] ({percentage:.1f}%) Scraping: {current_url[:70]}...", flush=True)
                 
                 # Scrape page with fast timeout
+                # IMPORTANT: fetch using original_url (preserves case),
+                # current_url is only for dedup/tracking (lowercased).
                 try:
                     content = await asyncio.wait_for(
-                        self.scrape_page(current_url),
-                        timeout=15.0  # 15 second timeout - be aggressive!
+                        self.scrape_page(original_url),
+                        timeout=45.0  # 15 second timeout - be aggressive!
                     )
                     
                     if content:
@@ -606,4 +626,3 @@ class CollegeScraper:
         print(f"💾 Final checkpoint saved: {len(scraped_content)} pages, {len(pdf_urls)} PDFs")
         
         return scraped_content
-
