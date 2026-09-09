@@ -6,7 +6,7 @@ import WelcomeScreen from './components/WelcomeScreen'
 import { formatMessage } from './utils/formatter'
 import { checkBackendStatus, sendChatMessage } from './utils/api'
 
-const API_BASE_URL = 'http://127.0.0.1:8001'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001'
 
 // One session id per browser tab/page load, so LangGraph keeps each
 // visitor's conversation in its own thread instead of merging everyone
@@ -30,19 +30,14 @@ function App() {
   const chatContainerRef = useRef(null)
 
   useEffect(() => {
-    // Check backend status on mount
     checkBackendStatus(API_BASE_URL, setBackendStatus)
-    
-    // Poll backend status every 10 seconds
     const statusInterval = setInterval(() => {
       checkBackendStatus(API_BASE_URL, setBackendStatus)
     }, 10000)
-
     return () => clearInterval(statusInterval)
   }, [])
 
   useEffect(() => {
-    // Scroll to bottom when messages change
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
     }
@@ -50,32 +45,21 @@ function App() {
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return
-
     const userMessage = inputValue.trim()
     setInputValue('')
-    
-    // Add user message to UI
     const userMsg = { role: 'user', content: userMessage }
     setMessages(prev => [...prev, userMsg])
     setIsLoading(true)
-
-    // Add thinking indicator
     const thinkingMsg = { role: 'bot', content: 'Thinking...', isThinking: true }
     setMessages(prev => [...prev, thinkingMsg])
-
     try {
       const response = await sendChatMessage(API_BASE_URL, userMessage, conversationHistory, SESSION_ID)
-      
-      // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))
-      
       if (response.status === 'success') {
-        // Add bot response
         const botMsg = { role: 'bot', content: response.response }
         setMessages(prev => [...prev, botMsg])
         setConversationHistory(response.history || [])
       } else if (response.status === 'rejected') {
-        // Show rejection message
         const botMsg = { role: 'bot', content: response.response }
         setMessages(prev => [...prev, botMsg])
       } else {
@@ -83,11 +67,7 @@ function App() {
       }
     } catch (error) {
       console.error('Error sending message:', error)
-      
-      // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))
-      
-      // Show error message
       let errorMessage = 'Sorry, I encountered an error. '
       if (error.name === 'AbortError' || error.message.includes('timeout')) {
         errorMessage += 'The request took too long. Please try again with a simpler question.'
@@ -98,7 +78,6 @@ function App() {
       } else {
         errorMessage += 'Please make sure the backend is running and try again.'
       }
-      
       const errorMsg = { role: 'bot', content: errorMessage }
       setMessages(prev => [...prev, errorMsg])
     } finally {
@@ -115,29 +94,19 @@ function App() {
 
   const handleSuggestionClick = async (question) => {
     setInputValue('')
-    
-    // Add user message to UI
     const userMsg = { role: 'user', content: question }
     setMessages(prev => [...prev, userMsg])
     setIsLoading(true)
-
-    // Add thinking indicator
     const thinkingMsg = { role: 'bot', content: 'Thinking...', isThinking: true }
     setMessages(prev => [...prev, thinkingMsg])
-
     try {
       const response = await sendChatMessage(API_BASE_URL, question, conversationHistory, SESSION_ID)
-      
-      // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))
-      
       if (response.status === 'success') {
-        // Add bot response
         const botMsg = { role: 'bot', content: response.response }
         setMessages(prev => [...prev, botMsg])
         setConversationHistory(response.history || [])
       } else if (response.status === 'rejected') {
-        // Show rejection message
         const botMsg = { role: 'bot', content: response.response }
         setMessages(prev => [...prev, botMsg])
       } else {
@@ -145,11 +114,7 @@ function App() {
       }
     } catch (error) {
       console.error('Error sending message:', error)
-      
-      // Remove thinking indicator
       setMessages(prev => prev.filter(msg => !msg.isThinking))
-      
-      // Show error message
       let errorMessage = 'Sorry, I encountered an error. '
       if (error.name === 'AbortError' || error.message.includes('timeout')) {
         errorMessage += 'The request took too long. Please try again with a simpler question.'
@@ -160,7 +125,6 @@ function App() {
       } else {
         errorMessage += 'Please make sure the backend is running and try again.'
       }
-      
       const errorMsg = { role: 'bot', content: errorMessage }
       setMessages(prev => [...prev, errorMsg])
     } finally {
@@ -198,11 +162,15 @@ function Message({ message }) {
   return (
     <div className={`message ${message.role}`}>
       <div className="message-avatar">
-        {message.role === 'user' ? '👤' : '🤖'}
+        {message.role === 'user' ? 'Y' : 'U'}
       </div>
       <div className={`message-content ${message.isThinking ? 'thinking' : ''}`}>
         {message.isThinking ? (
-          <span>{message.content}</span>
+          <span className="typing-dots" aria-label="UniBot is typing">
+            <span className="typing-dot"></span>
+            <span className="typing-dot"></span>
+            <span className="typing-dot"></span>
+          </span>
         ) : (
           <div dangerouslySetInnerHTML={{ __html: formatMessage(message.content) }} />
         )}
@@ -212,4 +180,3 @@ function Message({ message }) {
 }
 
 export default App
-

@@ -1,16 +1,15 @@
 import React from 'react'
 
 function Header({ backendStatus }) {
-  const statusStyle = {
-    background: backendStatus.online ? '#d1fae5' : '#fee2e2',
-    color: backendStatus.online ? '#065f46' : '#991b1b'
+  const dotStyle = {
+    background: backendStatus.online ? 'var(--good)' : 'var(--bad)'
   }
 
   return (
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <div className="logo-icon">🤖</div>
+          <div className="logo-icon">U</div>
         </div>
         <div className="header-text">
           <h1>UniBot</h1>
@@ -18,8 +17,8 @@ function Header({ backendStatus }) {
         </div>
       </div>
       <div className="header-right">
-        <div className="status-indicator" style={statusStyle}>
-          <span className="status-dot"></span>
+        <div className="status-indicator">
+          <span className="status-dot" style={dotStyle}></span>
           <span>{backendStatus.text}</span>
         </div>
       </div>

@@ -98,10 +98,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="UniBot API", lifespan=lifespan)
 
-# Enable CORS for frontend
+# Enable CORS for frontend.
+# Origins are read from ALLOWED_ORIGINS (comma-separated) so this doesn't
+# need a code change per environment - set it once as a platform env var
+# pointing at your real deployed frontend URL. Falls back to the local
+# Vite dev server ports for local development.
+allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8081,http://127.0.0.1:8081"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -10,7 +10,7 @@ const SUGGESTED_QUESTIONS = [
 function WelcomeScreen({ onSuggestionClick }) {
   return (
     <div className="welcome-screen">
-      <div className="welcome-icon">🤖</div>
+      <div className="welcome-icon">U</div>
       <h2>Welcome to UniBot!</h2>
       <p>Ask me anything about BMSIT - fees, admissions, academics, events, and more.</p>
       
