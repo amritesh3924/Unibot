@@ -18,7 +18,7 @@ def check_dependencies():
     required = {
         'fastapi': 'fastapi',
         'uvicorn': 'uvicorn',
-        'langchain-google-genai': 'langchain_google_genai',
+        'langchain-groq': 'langchain_groq',
         'langgraph': 'langgraph',
         'langchain-chroma': 'langchain_chroma',
         'playwright': 'playwright',
@@ -41,23 +41,23 @@ def check_dependencies():
     return True
 
 def check_env_file():
-    """Check if .env file exists and has GOOGLE_API_KEY"""
+    """Check if .env file exists and has GROQ_API_KEY"""
     env_path = Path(__file__).parent.parent / '.env'
     
     if not env_path.exists():
         print(f"[WARNING] .env file not found at {env_path}")
-        print("Create a .env file with GOOGLE_API_KEY=your_key")
+        print("Create a .env file with GROQ_API_KEY=your_key")
         return False
     
     # Try to load and check
     try:
         from dotenv import load_dotenv
         load_dotenv(env_path, override=True)
-        api_key = os.getenv("GOOGLE_API_KEY")
+        api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
-            print("[ERROR] GOOGLE_API_KEY not found in .env file")
+            print("[ERROR] GROQ_API_KEY not found in .env file")
             return False
-        print("[OK] GOOGLE_API_KEY is set in .env")
+        print("[OK] GROQ_API_KEY is set in .env")
         return True
     except Exception as e:
         print(f"[ERROR] Could not read .env file: {e}")
@@ -92,4 +92,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

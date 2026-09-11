@@ -1,5 +1,19 @@
 // Message formatting utility
 
+function isTableSeparator(line) {
+  const trimmed = line.trim()
+  if (!trimmed.includes('|') || !trimmed.includes('-')) return false
+  const cells = trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|')
+  return cells.length > 0 && cells.every(cell => /^:?-{2,}:?$/.test(cell.trim()))
+}
+
+function splitRow(line) {
+  let trimmed = line.trim()
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1)
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1)
+  return trimmed.split('|').map(c => c.trim())
+}
+
 export function formatMessage(content) {
   if (!content) return ''
 
@@ -8,22 +22,75 @@ export function formatMessage(content) {
   const processedLines = []
   let inList = false
   let listType = null
+  let inTable = false
+  let tableHeader = []
+  let tableRows = []
+
+  const closeList = () => {
+    if (inList) {
+      processedLines.push(`</${listType}>`)
+      inList = false
+      listType = null
+    }
+  }
+
+  const closeTable = () => {
+    if (inTable) {
+      const headerHtml = tableHeader.length
+        ? `<thead><tr>${tableHeader.map(h => `<th>${formatInline(h)}</th>`).join('')}</tr></thead>`
+        : ''
+      const rowsHtml = tableRows
+        .map(row => `<tr>${row.map(cell => `<td>${formatInline(cell)}</td>`).join('')}</tr>`)
+        .join('')
+      processedLines.push(
+        `<div class="table-wrapper"><table class="message-table">${headerHtml}<tbody>${rowsHtml}</tbody></table></div>`
+      )
+      inTable = false
+      tableHeader = []
+      tableRows = []
+    }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const trimmedLine = line.trim()
-    
+
+    // Handle ongoing table
+    if (inTable) {
+      if (trimmedLine && trimmedLine.includes('|')) {
+        if (isTableSeparator(trimmedLine)) {
+          continue
+        }
+        tableRows.push(splitRow(trimmedLine))
+        continue
+      } else {
+        closeTable()
+      }
+    }
+
+    // Check if new table starts
+    if (
+      trimmedLine &&
+      trimmedLine.includes('|') &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      closeList()
+      inTable = true
+      tableHeader = splitRow(trimmedLine)
+      tableRows = []
+      i++ // skip separator row
+      continue
+    }
+
     // Handle empty lines
     if (!trimmedLine) {
-      if (inList) {
-        processedLines.push(`</${listType}>`)
-        inList = false
-        listType = null
-      }
-      // Don't add breaks inside lists or immediately after lists
+      closeList()
+      closeTable()
+      // Don't add breaks inside lists or immediately after lists/tables
       if (processedLines.length > 0) {
         const last = processedLines[processedLines.length - 1]
-        if (!last.match(/^<\/(ul|ol|p|h[1-6])/)) {
+        if (!last.match(/^<\/(ul|ol|p|h[1-6]|table|div)/)) {
           processedLines.push('<br>')
         }
       }
@@ -34,111 +101,92 @@ export function formatMessage(content) {
     const h3Match = trimmedLine.match(/^###\s+(.+)$/)
     const h2Match = trimmedLine.match(/^##\s+(.+)$/)
     const h1Match = trimmedLine.match(/^#\s+(.+)$/)
-    
+
     if (h3Match) {
-      if (inList) {
-        processedLines.push(`</${listType}>`)
-        inList = false
-        listType = null
-      }
+      closeList()
+      closeTable()
       processedLines.push(`<h3>${formatInline(h3Match[1])}</h3>`)
       continue
     }
-    
+
     if (h2Match) {
-      if (inList) {
-        processedLines.push(`</${listType}>`)
-        inList = false
-        listType = null
-      }
+      closeList()
+      closeTable()
       processedLines.push(`<h2>${formatInline(h2Match[1])}</h2>`)
       continue
     }
-    
+
     if (h1Match) {
-      if (inList) {
-        processedLines.push(`</${listType}>`)
-        inList = false
-        listType = null
-      }
+      closeList()
+      closeTable()
       processedLines.push(`<h1>${formatInline(h1Match[1])}</h1>`)
       continue
     }
 
     // Check for numbered list items (1. or 1) format)
     const numberedMatch = trimmedLine.match(/^(\d+)[\.\)]\s+(.+)$/)
-    
+
     // Check for bullet points (- or *)
     const bulletMatch = trimmedLine.match(/^[\-\*]\s+(.+)$/)
-    
+
     // Check for bold text followed by colon (like "**Department:** Name")
-    // This pattern indicates a structured list item
     const boldColonMatch = trimmedLine.match(/^\*\*(.+?)\*\*:\s*(.+)$/)
-    
+
     if (numberedMatch) {
-      // Numbered list item
+      closeTable()
       if (!inList || listType !== 'ol') {
-        if (inList) {
-          processedLines.push(`</${listType}>`)
-        }
+        closeList()
         processedLines.push('<ol>')
         inList = true
         listType = 'ol'
       }
       processedLines.push(`<li>${formatInline(numberedMatch[2])}</li>`)
     } else if (bulletMatch) {
-      // Bullet list item
+      closeTable()
       if (!inList || listType !== 'ul') {
-        if (inList) {
-          processedLines.push(`</${listType}>`)
-        }
+        closeList()
         processedLines.push('<ul>')
         inList = true
         listType = 'ul'
       }
       processedLines.push(`<li>${formatInline(bulletMatch[1])}</li>`)
     } else if (boldColonMatch) {
-      // Bold text with colon - treat as list item for better formatting
+      closeTable()
       if (!inList || listType !== 'ul') {
-        if (inList) {
-          processedLines.push(`</${listType}>`)
-        }
+        closeList()
         processedLines.push('<ul>')
         inList = true
         listType = 'ul'
       }
-      // Format the bold part and the text after colon
-      processedLines.push(`<li><strong>${escapeHtml(boldColonMatch[1])}</strong>: ${formatInline(boldColonMatch[2])}</li>`)
+      processedLines.push(
+        `<li><strong>${escapeHtml(boldColonMatch[1])}</strong>: ${formatInline(boldColonMatch[2])}</li>`
+      )
     } else {
       // Regular paragraph
-      if (inList) {
-        processedLines.push(`</${listType}>`)
-        inList = false
-        listType = null
-      }
+      closeList()
+      closeTable()
       processedLines.push(`<p>${formatInline(trimmedLine)}</p>`)
     }
   }
-  
-  // Close any open list
-  if (inList) {
-    processedLines.push(`</${listType}>`)
-  }
+
+  // Close any remaining list or table
+  closeList()
+  closeTable()
 
   let formatted = processedLines.join('')
-  
+
   // Clean up multiple consecutive breaks
   formatted = formatted.replace(/(<br>\s*){3,}/g, '<br><br>')
-  
+
   // Clean up breaks before closing tags
   formatted = formatted.replace(/<br>\s*(<\/[^>]+>)/g, '$1')
-  
+
   // Clean up breaks after opening tags (except <br> itself)
   formatted = formatted.replace(/(<[^/>]+>)\s*<br>/g, '$1')
-  
+
   // Clean up empty paragraphs
   formatted = formatted.replace(/<p>\s*<\/p>/g, '')
-  
+
   return formatted
 }
 
@@ -176,7 +224,21 @@ function formatInline(text) {
   const placeholders = []
   let placeholderIndex = 0
   const makePlaceholder = () => `\u0001PH${placeholderIndex++}\u0002`
-  
+
+  // Line breaks <br> or <br/> - preserve model-output breaks
+  formatted = formatted.replace(/<br\s*\/?>/gi, () => {
+    const placeholder = makePlaceholder()
+    placeholders.push('<br>')
+    return placeholder
+  })
+
+  // Inline code (`code`)
+  formatted = formatted.replace(/`([^`]+)`/g, (match, code) => {
+    const placeholder = makePlaceholder()
+    placeholders.push(`<code>${escapeHtml(code)}</code>`)
+    return placeholder
+  })
+
   // Links [text](url) - handle first
   formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, linkText, url) => {
     const placeholder = makePlaceholder()

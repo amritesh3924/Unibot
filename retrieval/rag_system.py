@@ -23,14 +23,12 @@ class RAGSystem:
             persist_directory: Directory to persist the vector database
             collection_name: Name of the collection in Chroma
         """
-        # Verify API key is set
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
-            raise ValueError(
-                "GOOGLE_API_KEY environment variable is not set. "
-                "Please set it in your .env file or environment variables."
-            )
-        
+        # NOTE: no API key check here. This class only ever used FastEmbed
+        # (local, no API calls) for embeddings - the old GOOGLE_API_KEY
+        # check was leftover/misplaced from before that migration and was
+        # never actually required for anything this class does. Removing
+        # it means index_bmsit.py and other RAGSystem-only scripts can run
+        # standalone without needing an LLM provider key at all.
         self.persist_directory = persist_directory
         self.collection_name = collection_name
         # Local embeddings via FastEmbed (BAAI/bge-small-en-v1.5, 384-dim).
@@ -202,9 +200,21 @@ class RAGSystem:
         chunks = new_chunks
 
         # ---------------------------------------------------------
-        # RATE-LIMIT-SAFE BATCHING
+        # BATCHING
         # ---------------------------------------------------------
-        batch_size = 10
+        # NOTE: no artificial delay between batches here. That existed
+        # historically to stay under Gemini's embedding API rate limit
+        # (100 requests/minute, free tier - see project history), but
+        # this class has used FastEmbed (local, CPU-based, zero API
+        # calls) for embeddings ever since the migration away from
+        # Gemini embeddings. There is no external rate limit to respect
+        # anymore, so the old time.sleep(30)-per-batch was pure dead
+        # weight - for 18k+ chunks that alone adds up to hours of
+        # nothing-happening wait time. Batch size raised from 10 to 128:
+        # larger batches are also more efficient for local embedding
+        # (less per-call overhead), and 128 is a comfortable size for
+        # CPU-based FastEmbed without using excessive memory.
+        batch_size = 128
         total_chunks = len(chunks)
         added_count = 0
 
@@ -212,41 +222,44 @@ class RAGSystem:
             for i in range(0, total_chunks, batch_size):
                 batch = chunks[i:i + batch_size]
 
-                while True:
-                    try:
-                        self.vectorstore.add_documents(batch)
+                try:
+                    self.vectorstore.add_documents(batch)
+                    added_count += len(batch)
 
-                        added_count += len(batch)
-
-                        print(
-                            f"  [BATCH] Added batch {i//batch_size + 1}: "
-                            f"{added_count}/{total_chunks} chunks",
-                            flush=True
-                        )
-
-                        break
-
-                    except Exception as e:
-                        error_text = str(e)
-
-                        if (
-                            "429" in error_text
-                            or "RESOURCE_EXHAUSTED" in error_text
-                        ):
+                    print(
+                        f"  [BATCH] Added batch {i // batch_size + 1}: "
+                        f"{added_count}/{total_chunks} chunks",
+                        flush=True
+                    )
+                except Exception as batch_error:
+                    # Don't let one bad batch kill the entire run. Fall
+                    # back to adding this batch's chunks one at a time so
+                    # a single problematic chunk (odd encoding, unusual
+                    # content, etc.) doesn't sink the other ~127 good
+                    # ones alongside it - and so the run keeps going
+                    # instead of stopping here entirely.
+                    print(
+                        f"  ⚠️ Batch {i // batch_size + 1} failed "
+                        f"({batch_error}) - retrying its chunks one at a "
+                        f"time to isolate the problem",
+                        flush=True
+                    )
+                    for chunk in batch:
+                        try:
+                            self.vectorstore.add_documents([chunk])
+                            added_count += 1
+                        except Exception as chunk_error:
+                            source = chunk.metadata.get('source', 'unknown')
                             print(
-                                "  ⏳ Gemini quota reached. "
-                                "Waiting 65 seconds before retrying...",
+                                f"    ✗ Skipped one bad chunk from "
+                                f"{source[:60]}: {chunk_error}",
                                 flush=True
                             )
-
-                            time.sleep(65)
-
-                        else:
-                            raise
-
-                # Keep us safely below the 100 requests/minute limit.
-                if i + batch_size < total_chunks:
-                    time.sleep(30)
+                    print(
+                        f"  [BATCH] Recovered batch {i // batch_size + 1}: "
+                        f"{added_count}/{total_chunks} chunks so far",
+                        flush=True
+                    )
 
             print(
                 f"[OK] Added {added_count} new chunks to knowledge base"

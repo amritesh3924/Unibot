@@ -63,6 +63,7 @@ body {
 /* ============================================================
    Header
    ============================================================ */
+
 .header {
     display: flex;
     justify-content: space-between;
@@ -86,7 +87,7 @@ body {
 .logo {
     width: 44px;
     height: 44px;
-    background: rgba(22, 35, 61, 0.8);
+    background: transparent;
     border-radius: 10px;
     display: flex;
     align-items: center;
@@ -94,12 +95,26 @@ body {
     position: relative;
 }
 
+/* Mascot replaces the old U */
 .logo-icon {
-    font-family: var(--font-display);
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--brass-soft);
-    line-height: 1;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: transparent;
+}
+
+.logo-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: scale(1.15);
+    filter:
+        drop-shadow(0 5px 4px rgba(0, 0, 0, 0.25))
+        drop-shadow(0 10px 10px rgba(0, 0, 0, 0.15));
 }
 
 .header-text h1 {
@@ -124,6 +139,7 @@ body {
 
 /* Solid-enough background so this stays legible over any part
    of the photo, bright sky or dark foliage alike. */
+
 .status-indicator {
     display: flex;
     align-items: center;
@@ -154,6 +170,7 @@ body {
 /* ============================================================
    Chat container
    ============================================================ */
+
 .chat-container {
     flex: 1;
     overflow-y: auto;
@@ -191,6 +208,7 @@ body {
 /* ============================================================
    Welcome screen
    ============================================================ */
+
 .welcome-screen {
     display: flex;
     flex-direction: column;
@@ -208,15 +226,24 @@ body {
     width: 60px;
     height: 60px;
     border-radius: 14px;
-    background: rgba(22, 35, 61, 0.8);
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 26px;
-    font-family: var(--font-display);
-    font-size: 26px;
-    font-weight: 600;
-    color: var(--brass-soft);
+    overflow: visible;
+}
+
+.welcome-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: scale(1.15);
+    filter:
+        drop-shadow(0 8px 5px rgba(0, 0, 0, 0.28))
+        drop-shadow(0 18px 18px rgba(0, 0, 0, 0.18))
+        drop-shadow(0 0 10px rgba(80, 210, 255, 0.18));
 }
 
 .welcome-screen h2 {
@@ -273,12 +300,13 @@ body {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #1E3A8A;;
+    background: #1E3A8A;
 }
 
 /* ============================================================
    Messages
    ============================================================ */
+
 .messages {
     display: flex;
     flex-direction: column;
@@ -318,6 +346,17 @@ body {
     font-weight: 600;
     flex-shrink: 0;
     font-family: var(--font-display);
+    overflow: hidden;
+}
+
+.message-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: scale(1.15);
+    filter:
+        drop-shadow(0 4px 3px rgba(0, 0, 0, 0.25));
 }
 
 .message.user .message-avatar {
@@ -326,9 +365,13 @@ body {
 }
 
 .message.bot .message-avatar {
-    background: rgba(22, 35, 61, 0.8);
+    background: transparent;
     color: var(--brass-soft);
 }
+
+/* ============================================================
+   Rest of Messages
+   ============================================================ */
 
 .message-content {
     max-width: 80%;
@@ -397,8 +440,13 @@ body {
     margin-bottom: 10px;
 }
 
-.message-content ol { list-style-type: decimal; }
-.message-content ul { list-style-type: disc; }
+.message-content ol {
+    list-style-type: decimal;
+}
+
+.message-content ul {
+    list-style-type: disc;
+}
 
 .message-content li {
     margin-bottom: 7px;
@@ -406,7 +454,9 @@ body {
     padding-left: 2px;
 }
 
-.message-content li:last-child { margin-bottom: 0; }
+.message-content li:last-child {
+    margin-bottom: 0;
+}
 
 .message-content strong {
     font-weight: 600;
@@ -436,7 +486,55 @@ body {
     background: rgba(255, 255, 255, 0.16);
 }
 
-/* Typing indicator (replaces plain "Thinking..." text) */
+/* ============================================================
+   Tables in messages
+   ============================================================ */
+
+.table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    margin: 14px 0;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(15, 23, 42, 0.45);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.message-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    text-align: left;
+    color: var(--text-on-glass);
+}
+
+.message-table th {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--brass-soft);
+    font-weight: 600;
+    font-family: var(--font-display);
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    letter-spacing: 0.02em;
+}
+
+.message-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    vertical-align: top;
+    line-height: 1.55;
+}
+
+.message-table tr:last-child td {
+    border-bottom: none;
+}
+
+.message-table tr:hover td {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* Typing indicator */
+
 .thinking {
     display: flex;
     align-items: center;
@@ -461,17 +559,30 @@ body {
     animation: bounce 1.1s ease-in-out infinite;
 }
 
-.typing-dot:nth-child(2) { animation-delay: 0.15s; }
-.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+.typing-dot:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+    animation-delay: 0.3s;
+}
 
 @keyframes bounce {
-    0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-4px); }
+    0%, 60%, 100% {
+        opacity: 0.35;
+        transform: translateY(0);
+    }
+
+    30% {
+        opacity: 1;
+        transform: translateY(-4px);
+    }
 }
 
 /* ============================================================
    Input area
    ============================================================ */
+
 .input-area {
     padding: 12px 16px;
     margin: 14px 22px 18px;
@@ -552,6 +663,7 @@ body {
 /* ============================================================
    Responsive
    ============================================================ */
+
 @media (max-width: 768px) {
     .container {
         width: 100vw;
@@ -601,6 +713,7 @@ body {
 }
 
 /* Hide welcome screen when messages exist */
+
 .messages:not(:empty) ~ .welcome-screen,
 .messages:not(:empty) + .welcome-screen {
     display: none;

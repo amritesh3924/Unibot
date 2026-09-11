@@ -10,6 +10,16 @@ import sys
 
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    if hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
 
 # Add parent directory to path to import UniBot modules
 parent_dir = Path(__file__).parent.parent
@@ -42,10 +52,10 @@ async def lifespan(app: FastAPI):
     global unibot
     try:
         # Check for API key before initialization
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
             error_msg = (
-                "[ERROR] GOOGLE_API_KEY environment variable is not set. "
+                "[ERROR] GROQ_API_KEY environment variable is not set. "
                 "Please set it in your .env file or environment variables."
             )
             print(error_msg)
@@ -53,14 +63,14 @@ async def lifespan(app: FastAPI):
         
         college_url = os.getenv("COLLEGE_WEBSITE_URL", None)
         print("[INFO] Initializing UniBot...")
-        print(f"[INFO] - Gemini API Key: {'Set' if google_api_key else 'Missing'}")
+        print(f"[INFO] - Groq API Key: {'Set' if groq_api_key else 'Missing'}")
         print(f"[INFO] - College URL: {college_url or 'Not set'}")
         
         unibot = UniBot(college_website_url=college_url)
         await unibot.setup()
         
         print("[OK] UniBot initialized successfully")
-        print(f"[INFO] - Using Gemini model: gemini-3.5-flash-lite")
+        print(f"[INFO] - Using Groq model: openai/gpt-oss-20b (Worker/Evaluator/Intent)")
         print(f"[INFO] - Using embeddings: FastEmbed (BAAI/bge-small-en-v1.5, local, no API calls)")
         
         # Check if knowledge base has data

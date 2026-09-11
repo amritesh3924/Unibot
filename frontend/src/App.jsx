@@ -6,6 +6,7 @@ import WelcomeScreen from './components/WelcomeScreen'
 import { formatMessage } from './utils/formatter'
 import { checkBackendStatus, sendChatMessage } from './utils/api'
 
+import unibotMascot from './assets/unibot-mascot.png';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001'
 
 // One session id per browser tab/page load, so LangGraph keeps each
@@ -162,7 +163,7 @@ function Message({ message }) {
   return (
     <div className={`message ${message.role}`}>
       <div className="message-avatar">
-        {message.role === 'user' ? 'Y' : 'U'}
+        {message.role === 'user' ? 'Y' : <img src={unibotMascot} alt="UniBot" />}
       </div>
       <div className={`message-content ${message.isThinking ? 'thinking' : ''}`}>
         {message.isThinking ? (

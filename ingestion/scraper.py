@@ -459,8 +459,14 @@ class CollegeScraper:
                     if pdf_url not in pdf_urls:
                         print(f"Found PDF: {pdf_url[:80]}... (queued for processing)", flush=True)
                         pdf_urls.append(pdf_url)
-                    self.scraped_urls.add(current_url)  # Mark as scraped
-                    self.tracker.mark_scraped(current_url)
+                    self.scraped_urls.add(current_url)  # Dedup within this crawl only -
+                    # NOT tracker.mark_scraped() here: this PDF has only been
+                    # *discovered*, not processed yet. Marking it "succeeded"
+                    # at discovery time (before extraction is even attempted)
+                    # was the root cause of failed PDFs being silently
+                    # skipped forever - see the actual mark_succeeded/
+                    # mark_failed calls in the PDF processing loop below,
+                    # which run after a real extraction attempt.
                     continue
                 
                 # Progress logging with percentage and time
@@ -501,7 +507,10 @@ class CollegeScraper:
                                         pdf_urls.append(link)
                                         pdf_links_found += 1
                                         self.scraped_urls.add(normalized_link)
-                                        self.tracker.mark_scraped(normalized_link)
+                                        # Not tracker.mark_scraped() here either -
+                                        # same reasoning as the discovery point
+                                        # above: this is a newly-found link, not
+                                        # a processed one.
                                     continue
                                 
                                 if (normalized_link not in visited_urls and 
@@ -561,9 +570,18 @@ class CollegeScraper:
                 if idx % 10 == 0 or idx == 1 or idx == len(pdf_urls):
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     print(f"[{timestamp}] Processing PDF ({idx}/{len(pdf_urls)}) - Success: {pdf_count}, Failed: {failed_count}", flush=True)
+
+                # Save tracker progress periodically, not just at the very
+                # end of the whole scrape. Without this, a Ctrl+C (or
+                # crash, or timeout) partway through a long PDF run loses
+                # ALL of that run's succeeded/failed progress - it only
+                # existed in memory - forcing every already-processed PDF
+                # to be redone from scratch on the next run.
+                if idx % 25 == 0:
+                    self.tracker.save()
                 
-                # Check if already scraped
-                if self.tracker.is_scraped(pdf_url):
+                # Check if already succeeded before - failures are retried
+                if self.tracker.is_succeeded(pdf_url):
                     skipped_count += 1
                     continue
                 
@@ -576,9 +594,9 @@ class CollegeScraper:
                         )
                     except asyncio.TimeoutError:
                         print(f"  ⏱️  PDF timeout ({idx}/{len(pdf_urls)}): {pdf_url[:60]}...", flush=True)
-                        pdf_content = None
+                        pdf_content = {'success': False, 'failure_reason': 'timeout'}
                     
-                    if pdf_content and len(pdf_content.get('content', '')) > 50:
+                    if pdf_content.get('success') and len(pdf_content.get('content', '')) > 50:
                         pdf_content['type'] = 'pdf'
                         pdf_content['metadata'] = {
                             'source_type': 'pdf', 
@@ -586,8 +604,9 @@ class CollegeScraper:
                             'content_category': 'syllabus' if 'syllabus' in pdf_url.lower() else 'document'
                         }
                         scraped_content.append(pdf_content)
-                        # Mark PDF as scraped in tracker
-                        self.tracker.mark_scraped(pdf_url)
+                        # Only a real, successful extraction is marked
+                        # succeeded - this is what makes it permanent.
+                        self.tracker.mark_succeeded(pdf_url)
                         pdf_count += 1
                         
                         # Log quality if available
@@ -597,14 +616,17 @@ class CollegeScraper:
                             print(f"  {quality_indicator} PDF quality: {quality_score:.2f} - {os.path.basename(pdf_url)[:50]}", flush=True)
                     else:
                         failed_count += 1
-                        # Mark as scraped even if failed to avoid retrying corrupted PDFs
-                        self.tracker.mark_scraped(pdf_url)
-                        if pdf_content is None:
-                            print(f"  ✗ PDF filtered (low quality): {os.path.basename(pdf_url)[:50]}", flush=True)
+                        reason = pdf_content.get('failure_reason', 'unknown')
+                        # Mark as failed (NOT succeeded) - stays eligible
+                        # for retry on the next run, instead of being
+                        # silently skipped forever.
+                        self.tracker.mark_failed(pdf_url, reason)
+                        print(f"  ✗ PDF failed ({reason}): {os.path.basename(pdf_url)[:50]}", flush=True)
                 except Exception as e:
                     failed_count += 1
-                    # Mark as scraped even on error to avoid retrying
-                    self.tracker.mark_scraped(pdf_url)
+                    # Mark as failed with the exception, not succeeded -
+                    # stays eligible for retry.
+                    self.tracker.mark_failed(pdf_url, f'exception_{type(e).__name__}')
                     # Only show error for first few failures, then be quiet
                     if failed_count <= 5:
                         print(f"  ⚠ PDF error ({idx}/{len(pdf_urls)}): {str(e)[:60]}...", flush=True)
@@ -612,9 +634,14 @@ class CollegeScraper:
             print(f"\n{'='*60}")
             print(f"PDF Processing Summary:")
             print(f"  ✓ Successfully processed: {pdf_count}")
-            print(f"  ✗ Failed/Corrupted: {failed_count}")
-            print(f"  ⏭️  Skipped (already scraped): {skipped_count}")
+            print(f"  ✗ Failed (retryable next run): {failed_count}")
+            print(f"  ⏭️  Skipped (already succeeded before): {skipped_count}")
             print(f"  📊 Total: {len(pdf_urls)} PDFs")
+            failure_reasons = self.tracker.get_failure_reasons()
+            if failure_reasons:
+                print(f"\n  Failure breakdown (all retryable PDFs, not just this run):")
+                for reason, count in sorted(failure_reasons.items(), key=lambda x: -x[1]):
+                    print(f"    {reason}: {count}")
             print(f"{'='*60}")
         
         # Save final checkpoint

@@ -5,7 +5,7 @@ Validates queries are college-domain only and detects intent using LLM
 from typing import Dict, Optional, Tuple
 import re
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -24,19 +24,36 @@ class IntentDetector:
     
     def __init__(self):
         """Initialize the intent detector with LLM"""
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is not set")
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY environment variable is not set")
         
-        # Use a lightweight model for fast classification
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash-lite",
+        # openai/gpt-oss-20b, not the larger gpt-oss-120b used for the
+        # Worker/Evaluator: classification is a simple yes/no + category
+        # task that doesn't need a large model, so the smaller/faster
+        # model is a better fit here regardless of exact quota numbers
+        # (which change - verify current limits at console.groq.com if
+        # you hit rate limits specifically on classification calls).
+        self.llm = ChatGroq(
+            model="openai/gpt-oss-20b",
             temperature=0.1  # Low temperature for consistent classification
         )
         self.classifier_llm = self.llm.with_structured_output(QueryClassification)
     
     def _classify_query(self, query: str) -> QueryClassification:
         """Use LLM to classify if query is college-related and detect intent"""
+        # Fast path: a confident keyword match skips the Gemini call
+        # entirely. Worker + Evaluator already need several Gemini calls
+        # per question, so cutting this one out for the common case
+        # meaningfully helps stay under the free-tier rate limit. Only
+        # skip the LLM for a POSITIVE match - anything ambiguous (no
+        # keyword hit) still goes to the LLM below, since wrongly
+        # rejecting a real college question is worse than one extra call.
+        quick = self._fallback_classify(query)
+        if quick.is_college_related:
+            print(f"[TIMING] Intent classification: 0.00s (keyword fast-path, no LLM call)")
+            return quick
+
         system_prompt = """You are a query classifier for a college information assistant.
 Your job is to determine if a user's query is related to college/university topics.
 
@@ -88,7 +105,21 @@ Respond with:
         college_keywords = [
             'fee', 'fees', 'tuition', 'admission', 'exam', 'department', 
             'faculty', 'professor', 'hostel', 'college', 'university', 
-            'campus', 'course', 'program'
+            'campus', 'course', 'program',
+            # Expanded: previously missing terms meant genuinely common
+            # college questions (e.g. "who is the HOD of cse?") wouldn't
+            # even match, and were being sent to the LLM as ambiguous
+            # every single time.
+            'hod', 'head of department', 'department head',
+            'syllabus', 'curriculum', 'placement', 'placements',
+            'internship', 'scholarship', 'cutoff', 'counselling',
+            'counseling', 'seat', 'merit', 'bmsit', 'library', 'lab',
+            'laboratory', 'infrastructure', 'facility', 'timetable',
+            'rank', 'ranking', 'nirf', 'semester',
+            # BMSIT's actual department names/abbreviations
+            'cse', 'ece', 'eee', 'mech', 'mechanical', 'civil', 'aiml',
+            'csbs', 'mca', 'mba', 'chemistry', 'electronics',
+            'communication', 'computer science'
         ]
         
         has_college_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', query_lower) for kw in college_keywords)
@@ -104,7 +135,7 @@ Respond with:
                 intent = 'exams'
             elif any(kw in query_lower for kw in ['department', 'course', 'program']):
                 intent = 'departments'
-            elif any(kw in query_lower for kw in ['faculty', 'professor', 'teacher']):
+            elif any(kw in query_lower for kw in ['faculty', 'professor', 'teacher', 'hod', 'head of department']):
                 intent = 'faculty'
             elif any(kw in query_lower for kw in ['hostel', 'accommodation']):
                 intent = 'hostels'

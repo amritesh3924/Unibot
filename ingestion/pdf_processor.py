@@ -57,30 +57,40 @@ class PDFProcessor:
         return url_lower.endswith('.pdf') or 'application/pdf' in url_lower
     
     @staticmethod
-    def download_pdf(url: str, timeout: int = 15) -> Optional[BytesIO]:
-        """Download PDF from URL with timeout"""
+    def download_pdf(url: str, timeout: int = 15) -> tuple[Optional[BytesIO], Optional[str]]:
+        """
+        Download PDF from URL with timeout.
+
+        Returns:
+            (BytesIO_or_None, failure_reason_or_None). failure_reason is only
+            set when the first element is None, and is one of:
+            'timeout', 'http_error_<code>', 'download_error',
+            'not_pdf_content_type', 'invalid_pdf_magic_bytes'.
+        """
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             response = requests.get(url, headers=headers, timeout=timeout, stream=True)
-            response.raise_for_status()
-            
+
+            if response.status_code != 200:
+                return None, f'http_error_{response.status_code}'
+
             # Check if it's actually a PDF
             content_type = response.headers.get('Content-Type', '').lower()
             if 'pdf' not in content_type and not url.lower().endswith('.pdf'):
-                return None
-            
+                return None, 'not_pdf_content_type'
+
             # Quick validation - check if it starts with PDF magic bytes
             content = response.content
             if len(content) < 4 or not content[:4].startswith(b'%PDF'):
-                return None  # Not a valid PDF
-            
-            return BytesIO(content)
+                return None, 'invalid_pdf_magic_bytes'
+
+            return BytesIO(content), None
         except requests.Timeout:
-            return None
+            return None, 'timeout'
         except Exception:
-            return None
+            return None, 'download_error'
     
     @staticmethod
     def extract_text_pypdf2(pdf_bytes: BytesIO) -> str:
@@ -234,16 +244,42 @@ class PDFProcessor:
         return max(0.0, min(1.0, score))  # Clamp between 0 and 1
     
     @staticmethod
-    def extract_text(url: str) -> Optional[Dict[str, str]]:
+    def extract_text(url: str) -> Dict[str, object]:
         """
         Extract text from PDF URL with quality checks
-        
-        Returns:
-            Dictionary with 'content', 'url', 'title', 'type', 'quality_score', 'page_count' or None if failed
+
+        Always returns a dict (never None) so callers - and the scrape
+        tracker - can tell success from failure, and *why* it failed:
+
+            {'success': True, 'content': ..., 'title': ..., 'type': 'pdf',
+             'quality_score': ..., 'page_count': ..., 'failure_reason': None}
+
+            {'success': False, 'content': '', 'title': ..., 'type': 'pdf',
+             'quality_score': None, 'page_count': 0,
+             'failure_reason': '<see taxonomy below>'}
+
+        failure_reason values: 'timeout', 'http_error_<code>',
+        'download_error', 'not_pdf_content_type', 'invalid_pdf_magic_bytes',
+        'no_text_extracted' (nothing readable even after OCR fallback),
+        'low_quality_score' (extracted but scored < 0.3, likely garbled).
         """
-        pdf_bytes = PDFProcessor.download_pdf(url)
+        title = os.path.basename(url).replace('.pdf', '').replace('_', ' ').replace('-', ' ')
+
+        def _failure(reason: str) -> Dict[str, object]:
+            return {
+                'url': url,
+                'content': '',
+                'title': title,
+                'type': 'pdf',
+                'quality_score': None,
+                'page_count': 0,
+                'success': False,
+                'failure_reason': reason
+            }
+
+        pdf_bytes, download_failure_reason = PDFProcessor.download_pdf(url)
         if not pdf_bytes:
-            return None
+            return _failure(download_failure_reason or 'download_error')
         
         # Try pdfplumber first (better quality)
         text = PDFProcessor.extract_text_pdfplumber(pdf_bytes)
@@ -286,7 +322,7 @@ class PDFProcessor:
                 print(f"  ⚠ OCR failed: {e}")
         
         if not text or len(text) < 50:
-            return None
+            return _failure('no_text_extracted')
         
         # Clean the text
         text = PDFProcessor._clean_text(text)
@@ -306,10 +342,7 @@ class PDFProcessor:
         
         # Filter out very low quality extractions (quality score < 0.3)
         if quality_score < 0.3:
-            return None
-        
-        # Extract title from URL
-        title = os.path.basename(url).replace('.pdf', '').replace('_', ' ').replace('-', ' ')
+            return _failure('low_quality_score')
         
         return {
             'url': url,
@@ -317,7 +350,9 @@ class PDFProcessor:
             'title': title,
             'type': 'pdf',
             'quality_score': quality_score,
-            'page_count': page_count
+            'page_count': page_count,
+            'success': True,
+            'failure_reason': None
         }
     
     @staticmethod
@@ -357,11 +392,12 @@ class PDFProcessor:
             return ""
     
     @staticmethod
-    def process_pdf_url(url: str) -> Optional[Dict[str, str]]:
+    def process_pdf_url(url: str) -> Dict[str, object]:
         """
         Process PDF URL (alias for extract_text for compatibility)
         
         Returns:
-            Dictionary with PDF content or None if failed
+            Dictionary with 'success' bool and either the extracted content
+            or a 'failure_reason' - see extract_text() docstring.
         """
         return PDFProcessor.extract_text(url)

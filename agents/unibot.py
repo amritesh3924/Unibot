@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from dotenv import load_dotenv
 from langgraph.prebuilt import ToolNode
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing import List, Any, Optional, Dict
@@ -17,6 +17,17 @@ import asyncio
 import os
 from datetime import datetime
 
+if sys.platform.startswith("win"):
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    if hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
 
 # Add parent directory to path
 parent_dir = Path(__file__).parent.parent
@@ -68,11 +79,11 @@ class UniBot:
 
     async def setup(self):
         # Verify API key is set
-        google_api_key = os.getenv("GOOGLE_API_KEY")
+        groq_api_key = os.getenv("GROQ_API_KEY")
 
-        if not google_api_key:
+        if not groq_api_key:
             raise ValueError(
-                "GOOGLE_API_KEY environment variable is not set. "
+                "GROQ_API_KEY environment variable is not set. "
                 "Please set it in your .env file or environment variables."
             )
 
@@ -95,19 +106,28 @@ class UniBot:
         ]
 
         # Worker model
-        worker_model = "gemini-3.5-flash-lite"
+        # Using Groq (openai/gpt-oss-120b) instead of Gemini:
+        # meaningfully more generous free-tier rate limits (30 RPM / 14,400
+        # RPD vs Gemini's ~15 RPM / ~1,000-1,500 RPD), and Groq's custom
+        # LPU hardware runs 3-10x faster than typical GPU-based inference -
+        # directly addresses the stalls and 429 rate-limit errors this
+        # project was hitting on Gemini's free tier. GPT-OSS-120B is
+        # Worker model (openai/gpt-oss-20b: fast, reliable tool calling, within TPM limits)
+        worker_model = "openai/gpt-oss-20b"
 
-        worker_llm = ChatGoogleGenerativeAI(
-            model=worker_model
+        self.worker_llm = ChatGroq(
+            model=worker_model,
+            temperature=0.2
         )
 
-        self.worker_llm_with_tools = worker_llm.bind_tools(
+        self.worker_llm_with_tools = self.worker_llm.bind_tools(
             self.tools
         )
 
         # Evaluator model
-        evaluator_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash-lite"
+        evaluator_llm = ChatGroq(
+            model="openai/gpt-oss-20b",
+            temperature=0.1
         )
 
         self.evaluator_llm_with_output = (
@@ -128,9 +148,9 @@ For any question about the college, courses, admissions, faculty, facilities, po
 
 WORKFLOW:
 1. Identify the user's college-related question.
-2. Search the college knowledge base using query_college_knowledge_base.
-3. Carefully use the retrieved information to formulate the answer.
-4. If the retrieved information is insufficient, clearly state that the information is not available in the knowledge base.
+2. Search the college knowledge base using query_college_knowledge_base ONCE.
+3. Once you receive search results from query_college_knowledge_base, immediately synthesize and provide the final answer with source citations. Do NOT search again.
+4. If the retrieved information does not contain the answer, state that clearly.
 5. Do not invent unsupported information.
 6. Include the source links provided by the knowledge base.
 
@@ -158,6 +178,12 @@ Sources:
 2. [https://bmsit.ac.in/public/assets/pdf/fee/structure.pdf](https://bmsit.ac.in/public/assets/pdf/fee/structure.pdf)
 
 Do not use generic names such as "BMSIT Administration" when the exact source URL is available.
+
+DEPARTMENT HEADS & LEADERSHIP:
+When answering questions about Heads of Department (HODs), Deans, Principal, or college leadership:
+- Always use the official Academic Council Members list (2024-25 to 2026-27) or official department directory provided in the knowledge base.
+- Match each person carefully to their specific department (e.g. Dr. Satish Kumar T is HOD of Computer Science & Engineering (CSE); Dr. Surekha K B is HOD of Information Science & Engineering (ISE)).
+- Do NOT cite or use old student newsletters or event issues from past years for current HOD positions.
 
 You keep working on the task until either:
 - a clarification is genuinely required from the user, or
@@ -227,10 +253,24 @@ Provide the corrected answer directly.
                 )
             )
 
+        # Check if tools were already executed in this conversation turn
+        last_human_idx = -1
+        for idx, m in enumerate(messages):
+            if isinstance(m, HumanMessage) or getattr(m, "type", "") == "human":
+                last_human_idx = idx
+
+        already_used_tools = any(
+            getattr(m, "type", "") == "tool" or type(m).__name__ == "ToolMessage"
+            for m in messages[last_human_idx + 1:]
+        ) if last_human_idx >= 0 else False
+
+        # If tools were already run for this turn, invoke raw worker_llm so it synthesizes the answer
+        llm_to_invoke = self.worker_llm if already_used_tools else self.worker_llm_with_tools
+
         # Invoke Worker LLM
         start_time = time.perf_counter()
 
-        response = self.worker_llm_with_tools.invoke(
+        response = llm_to_invoke.invoke(
             messages
         )
 
@@ -386,9 +426,10 @@ Reject the response only when meaningful improvement is required.
             f"{eval_result.user_input_needed}"
         )
 
+        safe_feedback = str(eval_result.feedback).encode('ascii', 'backslashreplace').decode('ascii') if eval_result.feedback else ""
         print(
             f"[EVALUATOR] feedback="
-            f"{eval_result.feedback}"
+            f"{safe_feedback}"
         )
 
         elapsed = time.perf_counter() - start_time

@@ -1,5 +1,6 @@
 import React from 'react'
 
+import unibotMascot from '../assets/unibot-mascot.png';
 function Header({ backendStatus }) {
   const dotStyle = {
     background: backendStatus.online ? 'var(--good)' : 'var(--bad)'
@@ -9,7 +10,7 @@ function Header({ backendStatus }) {
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <div className="logo-icon">U</div>
+          <div className="logo-icon"><img src={unibotMascot} alt="UniBot" /></div>
         </div>
         <div className="header-text">
           <h1>UniBot</h1>

@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 import os
-from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+from typing import Optional
 import sys
 from pathlib import Path
 import time
@@ -11,9 +13,26 @@ sys.path.insert(0, str(parent_dir))
 
 from retrieval.rag_system import RAGSystem
 from ingestion.scraper import CollegeScraper
+from ingestion.categorize import detect_content_category
 
 
 load_dotenv(override=True)
+
+
+class QueryCollegeKnowledgeBaseInput(BaseModel):
+    query: str = Field(
+        description="The question or query about the college to search in the knowledge base."
+    )
+    content_type: Optional[str] = Field(
+        default=None,
+        description="Optional filter for specific content type (e.g., 'syllabus', 'pdf', 'course_info')."
+    )
+
+
+class ScrapeCollegeWebsiteInput(BaseModel):
+    base_url: str = Field(
+        description="The base URL of the college website to scrape."
+    )
 
 
 def get_rag_tools(rag_system: RAGSystem):
@@ -71,11 +90,20 @@ def get_rag_tools(rag_system: RAGSystem):
                 or "professor" in query_lower
                 or "staff" in query_lower
                 or "teacher" in query_lower
-                or "hod" in query_lower
-                or "head of department" in query_lower
-                or "department head" in query_lower
             ):
                 detected_category = "academic"
+
+            # NOTE: HOD/"head of department" queries deliberately do NOT
+            # set detected_category here. HOD names on BMSIT's site are
+            # commonly published in department newsletters, which
+            # ingestion/categorize.py tags as "document", not "academic" -
+            # confirmed directly against real indexed content. Filtering
+            # this primary search to "academic" would exclude exactly the
+            # chunks it needs to find, and the fallback-on-empty-results
+            # below doesn't reliably catch this: a wrong category filter
+            # often still returns *some* (just irrelevant) results, so it
+            # never triggers. The dedicated HOD-targeted search further
+            # below already handles this case correctly, unfiltered.
 
             elif "placement" in query_lower:
                 detected_category = "placement"
@@ -95,7 +123,7 @@ def get_rag_tools(rag_system: RAGSystem):
 
             docs = rag_system.search(
                 query,
-                k=6,
+                k=4,
                 filter_type=search_type,
                 filter_category=detected_category
             )
@@ -117,7 +145,7 @@ def get_rag_tools(rag_system: RAGSystem):
 
                 docs = rag_system.search(
                     query,
-                    k=6
+                    k=4
                 )
 
                 fallback_elapsed = (
@@ -134,8 +162,12 @@ def get_rag_tools(rag_system: RAGSystem):
             # 4. Targeted retrieval for HOD queries
             #
             # This is important because an initial semantic search
-            # can return relevant department documents without
-            # necessarily returning the exact HOD-name chunk.
+            # ---------------------------------------------------------
+            # 4. Targeted retrieval for HOD and Leadership queries
+            #
+            # Always prioritize current official governance/Academic Council
+            # documents and exclude outdated student newsletters (2018-2023)
+            # which contain obsolete former HOD names.
             # ---------------------------------------------------------
             is_hod_query = any(
                 term in query_lower
@@ -144,23 +176,23 @@ def get_rag_tools(rag_system: RAGSystem):
                     "head of department",
                     "department head",
                     "head of the department",
-                    "head of department"
+                    "principal",
+                    "vice principal",
+                    "dean"
                 ]
             )
 
             if is_hod_query:
                 hod_query = (
                     f"{query} "
-                    "Head of Department HOD "
-                    "department head faculty name"
+                    "Head of Department HOD Academic Council Approved leadership"
                 )
 
                 hod_start = time.perf_counter()
 
                 hod_docs = rag_system.search(
                     hod_query,
-                    k=6,
-                    filter_category="academic"
+                    k=8
                 )
 
                 hod_elapsed = time.perf_counter() - hod_start
@@ -171,34 +203,50 @@ def get_rag_tools(rag_system: RAGSystem):
                     f"results={len(hod_docs)}"
                 )
 
-                # Merge primary and targeted results
-                # while removing exact duplicate chunks.
-                combined_docs = []
+                # Filter out historical newsletters and student magazines
+                def is_outdated_source(d):
+                    src = d.metadata.get("source", "").lower()
+                    return "newsletter" in src or "news-letter" in src
+
+                candidate_docs = [
+                    d for d in hod_docs + docs
+                    if not is_outdated_source(d)
+                ]
+
+                # If all candidates were filtered, fall back to unfiltered
+                if not candidate_docs:
+                    candidate_docs = hod_docs + docs
+
+                # Score and rank: prioritize official Academic Council and department pages
+                def hod_rank_score(d):
+                    src = d.metadata.get("source", "").lower()
+                    content = d.page_content.lower()
+                    score = 0
+                    if "academic" in src and "council" in src:
+                        score += 50
+                    if "academic council" in content:
+                        score += 30
+                    if "dep-" in src or "faculty" in src:
+                        score += 20
+                    if "hod" in content or "head of department" in content:
+                        score += 10
+                    return score
+
+                # Deduplicate by (source, content)
                 seen_chunks = set()
+                deduped_candidates = []
+                for d in candidate_docs:
+                    key = (d.metadata.get("source", "Unknown"), d.page_content.strip())
+                    if key not in seen_chunks:
+                        seen_chunks.add(key)
+                        deduped_candidates.append(d)
 
-                for doc in docs + hod_docs:
-                    source = doc.metadata.get(
-                        "source",
-                        "Unknown"
-                    )
-                    content = doc.page_content.strip()
-
-                    dedupe_key = (
-                        source,
-                        content
-                    )
-
-                    if dedupe_key not in seen_chunks:
-                        seen_chunks.add(dedupe_key)
-                        combined_docs.append(doc)
-
-                # Keep context bounded so HOD queries do not
-                # unnecessarily inflate the Worker prompt.
-                docs = combined_docs[:8]
+                deduped_candidates.sort(key=hod_rank_score, reverse=True)
+                docs = deduped_candidates[:4]
 
                 print(
-                    f"[TIMING] HOD merged results: "
-                    f"{len(docs)}"
+                    f"[TIMING] HOD clean results: "
+                    f"{len(docs)} (prioritized official leadership sources)"
                 )
 
             # ---------------------------------------------------------
@@ -234,7 +282,7 @@ def get_rag_tools(rag_system: RAGSystem):
 
                     docs = rag_system.search(
                         expanded_query,
-                        k=6
+                        k=4
                     )
 
                     expansion_elapsed = (
@@ -270,7 +318,7 @@ def get_rag_tools(rag_system: RAGSystem):
                         "type",
                         "document"
                     )
-                    content = doc.page_content
+                    content = doc.page_content[:1200]
 
                     # Source link
                     if source != "Unknown":
@@ -420,93 +468,16 @@ def get_rag_tools(rag_system: RAGSystem):
                                 "title": title
                             }
 
-                            # Auto-detect content type
-                            # from URL
-                            url_lower = url.lower()
-
-                            if (
-                                "syllabus" in url_lower
-                                or "syllabi" in url_lower
-                            ):
-                                metadata["type"] = "syllabus"
-                                metadata["category"] = (
-                                    "academic"
-                                )
-
-                            elif (
-                                url_lower.endswith(".pdf")
-                                or content_type == "pdf"
-                            ):
-                                metadata["type"] = "pdf"
-
-                                if (
-                                    "syllabus"
-                                    in url_lower
-                                ):
-                                    metadata["category"] = (
-                                        "academic"
-                                    )
-                                    metadata["type"] = (
-                                        "syllabus"
-                                    )
-
-                                elif (
-                                    "course" in url_lower
-                                    or "curriculum"
-                                    in url_lower
-                                ):
-                                    metadata["category"] = (
-                                        "academic"
-                                    )
-
-                                else:
-                                    metadata["category"] = (
-                                        "document"
-                                    )
-
-                            elif (
-                                "course" in url_lower
-                                or "curriculum" in url_lower
-                            ):
-                                metadata["type"] = (
-                                    "course_info"
-                                )
-                                metadata["category"] = (
-                                    "academic"
-                                )
-
-                            elif "admission" in url_lower:
-                                metadata["type"] = (
-                                    "admission_info"
-                                )
-                                metadata["category"] = (
-                                    "admission"
-                                )
-
-                            elif (
-                                "faculty" in url_lower
-                                or "staff" in url_lower
-                            ):
-                                metadata["type"] = (
-                                    "faculty_info"
-                                )
-                                metadata["category"] = (
-                                    "academic"
-                                )
-
-                            elif "placement" in url_lower:
-                                metadata["category"] = (
-                                    "placement"
-                                )
-
-                            elif (
-                                "facility" in url_lower
-                                or "infrastructure"
-                                in url_lower
-                            ):
-                                metadata["category"] = (
-                                    "facilities"
-                                )
+                            # Auto-detect content type/category from the
+                            # URL - shared with the production ingestion
+                            # pipeline (ingestion/categorize.py) so both
+                            # paths stay consistent.
+                            detected_type, detected_category = detect_content_category(
+                                url, content_type
+                            )
+                            metadata["type"] = detected_type
+                            if detected_category:
+                                metadata["category"] = detected_category
 
                             metadatas.append(metadata)
                             successful += 1
@@ -573,9 +544,9 @@ def get_rag_tools(rag_system: RAGSystem):
     # -------------------------------------------------------------
     # RAG tool
     # -------------------------------------------------------------
-    rag_query_tool = Tool(
-        name="query_college_knowledge_base",
+    rag_query_tool = StructuredTool.from_function(
         func=query_college_knowledge_base,
+        name="query_college_knowledge_base",
         description=(
             "MANDATORY: Search the college knowledge base "
             "for information. You MUST use this tool FIRST "
@@ -586,26 +557,26 @@ def get_rag_tools(rag_system: RAGSystem):
             "using this tool first. The tool returns relevant "
             "information from the knowledge base along with "
             "source URLs."
-        )
+        ),
+        args_schema=QueryCollegeKnowledgeBaseInput
     )
 
     # -------------------------------------------------------------
     # Scraper tool
     # -------------------------------------------------------------
-    scrape_tool = Tool(
-        name="scrape_college_website",
+    scrape_tool = StructuredTool.from_function(
         func=scrape_college_website_sync,
+        name="scrape_college_website",
         description=(
             "Scrape the college website and add content to "
             "the knowledge base. Use this when you need to "
             "gather information from the college website. "
             "Provide the base URL of the college website."
-        )
+        ),
+        args_schema=ScrapeCollegeWebsiteInput
     )
 
     return [
         rag_query_tool,
         scrape_tool
     ]
-
-    return base_tools

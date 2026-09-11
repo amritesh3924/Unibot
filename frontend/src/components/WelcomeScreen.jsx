@@ -1,5 +1,6 @@
 import React from 'react'
 
+import unibotMascot from '../assets/unibot-mascot.png';
 const SUGGESTED_QUESTIONS = [
   'What is the fee structure for B.Tech?',
   'When is the last date for exam registration?',
@@ -10,7 +11,7 @@ const SUGGESTED_QUESTIONS = [
 function WelcomeScreen({ onSuggestionClick }) {
   return (
     <div className="welcome-screen">
-      <div className="welcome-icon">U</div>
+      <div className="welcome-icon"><img src={unibotMascot} alt="UniBot" /></div>
       <h2>Welcome to UniBot!</h2>
       <p>Ask me anything about BMSIT - fees, admissions, academics, events, and more.</p>
       
