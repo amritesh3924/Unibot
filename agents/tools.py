@@ -159,9 +159,6 @@ def get_rag_tools(rag_system: RAGSystem):
                 )
 
             # ---------------------------------------------------------
-            # 4. Targeted retrieval for HOD queries
-            #
-            # This is important because an initial semantic search
             # ---------------------------------------------------------
             # 4. Targeted retrieval for HOD and Leadership queries
             #

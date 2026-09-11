@@ -106,13 +106,16 @@ class UniBot:
         ]
 
         # Worker model
-        # Using Groq (openai/gpt-oss-120b) instead of Gemini:
-        # meaningfully more generous free-tier rate limits (30 RPM / 14,400
-        # RPD vs Gemini's ~15 RPM / ~1,000-1,500 RPD), and Groq's custom
-        # LPU hardware runs 3-10x faster than typical GPU-based inference -
-        # directly addresses the stalls and 429 rate-limit errors this
-        # project was hitting on Gemini's free tier. GPT-OSS-120B is
-        # Worker model (openai/gpt-oss-20b: fast, reliable tool calling, within TPM limits)
+        # Using Groq instead of Gemini: meaningfully more generous
+        # free-tier rate limits and much faster inference (Groq's custom
+        # LPU hardware) - directly addresses the stalls and 429 rate-limit
+        # errors this project was hitting on Gemini's free tier.
+        # Using gpt-oss-20b (not the larger 120b) for both Worker and
+        # Evaluator: 20b's smaller context need keeps requests comfortably
+        # under Groq's free-tier 8,000 TPM limit even with multiple
+        # retrieved chunks in the prompt - 120b was hitting 413 "request
+        # too large" errors under the same load. Response times dropped
+        # from ~45s to ~1.5s as a result.
         worker_model = "openai/gpt-oss-20b"
 
         self.worker_llm = ChatGroq(
